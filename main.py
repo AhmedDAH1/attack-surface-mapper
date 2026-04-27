@@ -8,6 +8,7 @@ import argparse
 import sys
 from src.scanners.network_scanner import NetworkScanner
 from src.scanners.service_enumerator import ServiceEnumerator
+from src.analyzers.mitre_mapper import MITREMapper
 
 
 def run_scan(target: str, ports: list = None, skip_enumeration: bool = False, 
@@ -18,7 +19,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     Pipeline:
     1. Network Scanner - Discover open ports
     2. Service Enumerator - Identify versions and CVEs
-    3. (Future) MITRE Mapper - Map to ATT&CK framework
+    3. MITRE Mapper - Map to ATT&CK framework
     4. (Future) Report Generator - Create final reports
     """
     
@@ -40,6 +41,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     print()
     
     # Phase 2: Service Enumeration (optional)
+    mitre_findings = []
     if not skip_enumeration:
         print("[PHASE 2] Service Enumeration")
         print("-" * 70)
@@ -52,6 +54,15 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         
         print()
         
+        # Phase 3: MITRE ATT&CK Mapping
+        print("[PHASE 3] MITRE ATT&CK Mapping")
+        print("-" * 70)
+        
+        mapper = MITREMapper()
+        mitre_findings = mapper.map_findings(service_results)
+        
+        print()
+        
         # Summary
         print("[SUMMARY]")
         print("-" * 70)
@@ -59,23 +70,39 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print(f"Open ports found: {len(scan_results)}")
         print(f"Services enumerated: {len(service_results)}")
         
+        # MITRE stats
+        if mitre_findings:
+            attack_summary = mapper.get_attack_summary()
+            print(f"MITRE techniques identified: {attack_summary['unique_techniques']}")
+            print(f"Attack tactics covered: {len(attack_summary['tactics_covered'])}")
+            print(f"  Tactics: {', '.join(attack_summary['tactics_covered'][:5])}")
+            
+            # Risk breakdown
+            risk_dist = attack_summary['risk_distribution']
+            print(f"\nRisk Distribution:")
+            print(f"  Critical (≥7.0): {risk_dist['critical']}")
+            print(f"  High (5.0-6.9): {risk_dist['high']}")
+            print(f"  Medium (3.0-4.9): {risk_dist['medium']}")
+            print(f"  Low (<3.0): {risk_dist['low']}")
+        
         if not skip_cve:
             total_cves = sum(len(s.vulnerabilities) for s in service_results)
             services_with_vulns = len([s for s in service_results if s.vulnerabilities])
-            print(f"Services with vulnerabilities: {services_with_vulns}")
-            print(f"Total CVEs discovered: {total_cves}")
+            print(f"\nVulnerability Summary:")
+            print(f"  Services with CVEs: {services_with_vulns}")
+            print(f"  Total CVEs found: {total_cves}")
             
             if total_cves > 0:
-                print("\n[!] Vulnerabilities detected:")
+                print("\n[!] Top Vulnerabilities:")
                 for service in service_results:
                     if service.vulnerabilities:
                         print(f"\n  {service.ip}:{service.port} - {service.product} {service.version}")
-                        for vuln in service.vulnerabilities[:3]:  # Show top 3
+                        for vuln in service.vulnerabilities[:2]:  # Show top 2
                             print(f"    • {vuln.cve_id} [{vuln.severity}] CVSS: {vuln.cvss_score}")
         
         # Export results
         if output:
-            enumerator.export_json(output)
+            mapper.export_json(output)
     
     print()
     print("=" * 70)
@@ -99,7 +126,7 @@ Examples:
   python main.py scan 192.168.1.0/24 --skip-cve
   
   # Full scan with report export
-  python main.py scan 192.168.1.100 -o reports/scan_results.json
+  python main.py scan 192.168.1.100 -o reports/attack_surface.json
         """
     )
     
