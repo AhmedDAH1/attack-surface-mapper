@@ -6,9 +6,11 @@ Main entry point that orchestrates all scanning and analysis modules.
 
 import argparse
 import sys
+from pathlib import Path
 from src.scanners.network_scanner import NetworkScanner
 from src.scanners.service_enumerator import ServiceEnumerator
 from src.analyzers.mitre_mapper import MITREMapper
+from src.reporters.html_reporter import HTMLReporter
 
 
 def run_scan(target: str, ports: list = None, skip_enumeration: bool = False, 
@@ -20,7 +22,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     1. Network Scanner - Discover open ports
     2. Service Enumerator - Identify versions and CVEs
     3. MITRE Mapper - Map to ATT&CK framework
-    4. (Future) Report Generator - Create final reports
+    4. Report Generator - Create HTML and JSON reports
     """
     
     print("=" * 70)
@@ -42,6 +44,8 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     
     # Phase 2: Service Enumeration (optional)
     mitre_findings = []
+    service_results = []
+    
     if not skip_enumeration:
         print("[PHASE 2] Service Enumeration")
         print("-" * 70)
@@ -60,6 +64,36 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         
         mapper = MITREMapper()
         mitre_findings = mapper.map_findings(service_results)
+        
+        print()
+        
+        # Phase 4: Report Generation
+        print("[PHASE 4] Report Generation")
+        print("-" * 70)
+        
+        # Generate output filename if not provided
+        if not output:
+            timestamp = Path(f"reports/scan_{target.replace('/', '_')}").stem
+            output_base = f"reports/attack_surface_{timestamp}"
+        else:
+            output_base = Path(output).stem
+            output_base = f"reports/{output_base}"
+        
+        # Generate both JSON and HTML reports
+        json_file = f"{output_base}.json"
+        html_file = f"{output_base}.html"
+        
+        # JSON export (for automation)
+        mapper.export_json(json_file)
+        
+        # HTML report (for viewing)
+        reporter = HTMLReporter()
+        reporter.generate_report(
+            network_results=scan_results,
+            service_results=service_results,
+            mitre_findings=mitre_findings,
+            output_file=html_file
+        )
         
         print()
         
@@ -100,9 +134,10 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
                         for vuln in service.vulnerabilities[:2]:  # Show top 2
                             print(f"    • {vuln.cve_id} [{vuln.severity}] CVSS: {vuln.cvss_score}")
         
-        # Export results
-        if output:
-            mapper.export_json(output)
+        print(f"\n📊 Reports generated:")
+        print(f"  • JSON: {json_file}")
+        print(f"  • HTML: {html_file}")
+        print(f"\n💡 Open the HTML report in your browser to view the interactive dashboard!")
     
     print()
     print("=" * 70)
@@ -116,7 +151,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Quick scan of common ports
+  # Quick scan of common ports (generates HTML + JSON reports)
   python main.py scan 192.168.1.100
 
   # Scan specific ports with full enumeration
@@ -125,8 +160,11 @@ Examples:
   # Scan network range, skip CVE lookup for speed
   python main.py scan 192.168.1.0/24 --skip-cve
   
-  # Full scan with report export
-  python main.py scan 192.168.1.100 -o reports/attack_surface.json
+  # Full scan with custom report name
+  python main.py scan 192.168.1.100 -o my_company_scan
+  
+  # Fast scan (network discovery only, no enumeration)
+  python main.py scan 192.168.1.0/24 --skip-enum
         """
     )
     
@@ -140,7 +178,7 @@ Examples:
                             help='Skip service enumeration (faster)')
     scan_parser.add_argument('--skip-cve', action='store_true',
                             help='Skip CVE lookup (faster)')
-    scan_parser.add_argument('-o', '--output', help='Export results to JSON file')
+    scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json and .html)')
     
     args = parser.parse_args()
     
