@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from src.scanners.network_scanner import NetworkScanner
 from src.scanners.service_enumerator import ServiceEnumerator
+from src.scanners.config_auditor import ConfigAuditor
 from src.analyzers.mitre_mapper import MITREMapper
 from src.reporters.html_reporter import HTMLReporter
 
@@ -21,8 +22,9 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     Pipeline:
     1. Network Scanner - Discover open ports
     2. Service Enumerator - Identify versions and CVEs
-    3. MITRE Mapper - Map to ATT&CK framework
-    4. Report Generator - Create HTML and JSON reports
+    3. Configuration Auditor - Check for misconfigurations
+    4. MITRE Mapper - Map to ATT&CK framework
+    5. Report Generator - Create HTML and JSON reports
     """
     
     print("=" * 70)
@@ -45,6 +47,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     # Phase 2: Service Enumeration (optional)
     mitre_findings = []
     service_results = []
+    config_issues = []
     
     if not skip_enumeration:
         print("[PHASE 2] Service Enumeration")
@@ -55,6 +58,26 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         
         enumerator = ServiceEnumerator(use_cve_lookup=not skip_cve)
         service_results = enumerator.enumerate_multiple(targets)
+        
+        print()
+        
+        # Phase 2.5: Configuration Audit
+        print("[PHASE 2.5] Configuration Audit")
+        print("-" * 70)
+        
+        # Prepare data for auditor (ip, port, service, banner)
+        audit_targets = []
+        for s in service_results:
+            banner = None
+            # Try to get banner from original scan results
+            for scan_res in scan_results:
+                if scan_res.ip == s.ip and scan_res.port == s.port:
+                    banner = scan_res.banner
+                    break
+            audit_targets.append((s.ip, s.port, s.service, banner))
+        
+        auditor = ConfigAuditor()
+        config_issues = auditor.audit_multiple(audit_targets)
         
         print()
         
@@ -92,6 +115,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             network_results=scan_results,
             service_results=service_results,
             mitre_findings=mitre_findings,
+            config_issues=config_issues,
             output_file=html_file
         )
         
@@ -99,17 +123,26 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         
         # Summary
         print("[SUMMARY]")
-        print("-" * 70)
+        print("=" * 70)
         print(f"Total hosts scanned: {len(set(r.ip for r in scan_results))}")
         print(f"Open ports found: {len(scan_results)}")
         print(f"Services enumerated: {len(service_results)}")
         
+        # Configuration audit stats
+        if config_issues:
+            config_summary = auditor.get_summary()
+            print(f"\nConfiguration Issues: {config_summary['total_issues']}")
+            print(f"  Critical: {config_summary['by_severity']['critical']}")
+            print(f"  High: {config_summary['by_severity']['high']}")
+            print(f"  Medium: {config_summary['by_severity']['medium']}")
+            print(f"  Low: {config_summary['by_severity']['low']}")
+        
         # MITRE stats
         if mitre_findings:
             attack_summary = mapper.get_attack_summary()
-            print(f"MITRE techniques identified: {attack_summary['unique_techniques']}")
-            print(f"Attack tactics covered: {len(attack_summary['tactics_covered'])}")
-            print(f"  Tactics: {', '.join(attack_summary['tactics_covered'][:5])}")
+            print(f"\nMITRE ATT&CK Analysis:")
+            print(f"  Techniques identified: {attack_summary['unique_techniques']}")
+            print(f"  Tactics covered: {len(attack_summary['tactics_covered'])}")
             
             # Risk breakdown
             risk_dist = attack_summary['risk_distribution']
@@ -131,10 +164,10 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
                 for service in service_results:
                     if service.vulnerabilities:
                         print(f"\n  {service.ip}:{service.port} - {service.product} {service.version}")
-                        for vuln in service.vulnerabilities[:2]:  # Show top 2
+                        for vuln in service.vulnerabilities[:2]:
                             print(f"    • {vuln.cve_id} [{vuln.severity}] CVSS: {vuln.cvss_score}")
         
-        print(f"\n📊 Reports generated:")
+        print(f"\n📊 Reports Generated:")
         print(f"  • JSON: {json_file}")
         print(f"  • HTML: {html_file}")
         print(f"\n💡 Open the HTML report in your browser to view the interactive dashboard!")
@@ -154,7 +187,7 @@ Examples:
   # Quick scan of common ports (generates HTML + JSON reports)
   python main.py scan 192.168.1.100
 
-  # Scan specific ports with full enumeration
+  # Scan specific ports with full analysis
   python main.py scan 192.168.1.100 -p 22,80,443,3306
   
   # Scan network range, skip CVE lookup for speed
@@ -163,7 +196,7 @@ Examples:
   # Full scan with custom report name
   python main.py scan 192.168.1.100 -o my_company_scan
   
-  # Fast scan (network discovery only, no enumeration)
+  # Fast scan (network discovery only)
   python main.py scan 192.168.1.0/24 --skip-enum
         """
     )

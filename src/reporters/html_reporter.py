@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
-import base64
 
 
 class HTMLReporter:
@@ -18,6 +17,7 @@ class HTMLReporter:
     - Executive summary dashboard
     - Risk distribution charts
     - MITRE ATT&CK technique breakdown
+    - Configuration issue tracking
     - Detailed findings table
     - Responsive design
     """
@@ -26,7 +26,8 @@ class HTMLReporter:
         self.report_data = {}
     
     def generate_report(self, network_results: List, service_results: List,
-                       mitre_findings: List, output_file: str):
+                       mitre_findings: List, config_issues: List = None, 
+                       output_file: str = 'report.html'):
         """
         Generate complete HTML report.
         
@@ -34,12 +35,18 @@ class HTMLReporter:
             network_results: List of ScanResult objects
             service_results: List of ServiceInfo objects
             mitre_findings: List of MappedFinding objects
+            config_issues: List of ConfigIssue objects (optional)
             output_file: Output HTML file path
         """
         print(f"[*] Generating HTML report...")
         
         # Prepare data
-        self.report_data = self._prepare_data(network_results, service_results, mitre_findings)
+        self.report_data = self._prepare_data(
+            network_results, 
+            service_results, 
+            mitre_findings, 
+            config_issues or []
+        )
         
         # Generate HTML
         html_content = self._build_html()
@@ -51,7 +58,7 @@ class HTMLReporter:
         
         print(f"[+] HTML report saved to {output_file}")
     
-    def _prepare_data(self, network_results, service_results, mitre_findings) -> Dict:
+    def _prepare_data(self, network_results, service_results, mitre_findings, config_issues) -> Dict:
         """Prepare data for HTML template"""
         
         # Calculate statistics
@@ -88,6 +95,12 @@ class HTMLReporter:
         risk_medium = len([f for f in mitre_findings if 3.0 <= f.risk_score < 5.0])
         risk_low = len([f for f in mitre_findings if f.risk_score < 3.0])
         
+        # Configuration issues statistics
+        config_critical = len([c for c in config_issues if c.severity == 'CRITICAL'])
+        config_high = len([c for c in config_issues if c.severity == 'HIGH'])
+        config_medium = len([c for c in config_issues if c.severity == 'MEDIUM'])
+        config_low = len([c for c in config_issues if c.severity == 'LOW'])
+        
         return {
             'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'total_hosts': total_hosts,
@@ -103,6 +116,12 @@ class HTMLReporter:
             'risk_high': risk_high,
             'risk_medium': risk_medium,
             'risk_low': risk_low,
+            'config_issues': config_issues,
+            'total_config_issues': len(config_issues),
+            'config_critical': config_critical,
+            'config_high': config_high,
+            'config_medium': config_medium,
+            'config_low': config_low,
             'network_results': network_results,
             'service_results': service_results,
             'mitre_findings': sorted(mitre_findings, key=lambda x: x.risk_score, reverse=True)
@@ -311,18 +330,33 @@ class HTMLReporter:
             font-size: 0.9em;
         }}
         
-        .risk-bar {{
-            height: 8px;
-            background: #2a2a3e;
-            border-radius: 4px;
-            overflow: hidden;
-            margin-top: 10px;
+        .config-issue {{
+            background: #16213e;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            border-left: 4px solid #e74c3c;
         }}
         
-        .risk-fill {{
-            height: 100%;
-            background: linear-gradient(90deg, #27ae60, #f39c12, #e67e22, #e74c3c);
-            transition: width 0.3s ease;
+        .issue-title {{
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }}
+        
+        .issue-desc {{
+            color: #a0a0a0;
+            font-size: 0.95em;
+            margin-bottom: 8px;
+        }}
+        
+        .remediation {{
+            background: #0f0f23;
+            padding: 10px;
+            border-radius: 4px;
+            color: #27ae60;
+            font-size: 0.9em;
+            margin-top: 8px;
         }}
         
         footer {{
@@ -330,20 +364,6 @@ class HTMLReporter:
             color: #666;
             margin-top: 50px;
             padding: 20px;
-        }}
-        
-        .vulnerability-item {{
-            background: #16213e;
-            padding: 10px 15px;
-            border-radius: 6px;
-            margin: 8px 0;
-            border-left: 3px solid #e74c3c;
-        }}
-        
-        .cve-id {{
-            color: #667eea;
-            font-weight: 600;
-            font-family: monospace;
         }}
     </style>
 </head>
@@ -366,8 +386,8 @@ class HTMLReporter:
             </div>
             
             <div class="stat-card">
-                <div class="stat-value">{self.report_data['unique_techniques']}</div>
-                <div class="stat-label">Attack Techniques</div>
+                <div class="stat-value">{self.report_data['total_config_issues']}</div>
+                <div class="stat-label">Config Issues</div>
             </div>
             
             <div class="stat-card">
@@ -376,31 +396,9 @@ class HTMLReporter:
             </div>
         </div>
         
-        <div class="stats-grid">
-            <div class="stat-card critical">
-                <div class="stat-value">{self.report_data['risk_critical']}</div>
-                <div class="stat-label">Critical Risk</div>
-            </div>
-            
-            <div class="stat-card high">
-                <div class="stat-value">{self.report_data['risk_high']}</div>
-                <div class="stat-label">High Risk</div>
-            </div>
-            
-            <div class="stat-card medium">
-                <div class="stat-value">{self.report_data['risk_medium']}</div>
-                <div class="stat-label">Medium Risk</div>
-            </div>
-            
-            <div class="stat-card low">
-                <div class="stat-value">{self.report_data['risk_low']}</div>
-                <div class="stat-label">Low Risk</div>
-            </div>
-        </div>
-        
+        {self._build_config_issues_section()}
         {self._build_mitre_section()}
         {self._build_findings_table()}
-        {self._build_vulnerabilities_section()}
         
         <footer>
             <p>Generated by Attack Surface Mapper | Built by Ahmed Dahdouh</p>
@@ -409,6 +407,42 @@ class HTMLReporter:
     </div>
 </body>
 </html>"""
+    
+    def _build_config_issues_section(self) -> str:
+        """Build configuration issues section"""
+        if not self.report_data['config_issues']:
+            return ""
+        
+        issues_html = ""
+        for issue in self.report_data['config_issues'][:10]:  # Top 10
+            severity_class = issue.severity.lower()
+            issues_html += f"""
+            <div class="config-issue" style="border-left-color: {'#e74c3c' if issue.severity == 'CRITICAL' else '#e67e22' if issue.severity == 'HIGH' else '#f39c12' if issue.severity == 'MEDIUM' else '#27ae60'};">
+                <div class="issue-title">
+                    <span class="badge badge-{severity_class}">{issue.severity}</span>
+                    {issue.title}
+                </div>
+                <div class="issue-desc">
+                    <strong>{issue.ip}:{issue.port}</strong> - {issue.description}
+                </div>
+                <div class="remediation">
+                    💡 Remediation: {issue.remediation}
+                </div>
+            </div>
+            """
+        
+        return f"""
+        <div class="section">
+            <h2>⚙️ Configuration Issues ({self.report_data['total_config_issues']})</h2>
+            <div style="margin-bottom: 20px;">
+                <span class="badge badge-critical">Critical: {self.report_data['config_critical']}</span>
+                <span class="badge badge-high">High: {self.report_data['config_high']}</span>
+                <span class="badge badge-medium">Medium: {self.report_data['config_medium']}</span>
+                <span class="badge badge-low">Low: {self.report_data['config_low']}</span>
+            </div>
+            {issues_html}
+        </div>
+        """
     
     def _build_mitre_section(self) -> str:
         """Build MITRE ATT&CK section"""
@@ -446,7 +480,6 @@ class HTMLReporter:
                 <td><span class="badge badge-{risk_class}">{risk_class}</span></td>
                 <td>{finding.risk_score}/10</td>
                 <td>{techniques_html}</td>
-                <td style="font-size: 0.9em; color: #a0a0a0;">{finding.rationale[:100]}...</td>
             </tr>
             """
         
@@ -461,43 +494,13 @@ class HTMLReporter:
                         <th>Service</th>
                         <th>Risk Level</th>
                         <th>Score</th>
-                        <th>Techniques</th>
-                        <th>Rationale</th>
+                        <th>MITRE Techniques</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows if rows else '<tr><td colspan="7" style="text-align:center; color:#666;">No findings</td></tr>'}
+                    {rows if rows else '<tr><td colspan="6" style="text-align:center; color:#666;">No findings</td></tr>'}
                 </tbody>
             </table>
-        </div>
-        """
-    
-    def _build_vulnerabilities_section(self) -> str:
-        """Build vulnerabilities section"""
-        vulns_html = ""
-        
-        for service in self.report_data['service_results']:
-            if hasattr(service, 'vulnerabilities') and service.vulnerabilities:
-                vulns_html += f"<h3 style='color: #667eea; margin-top: 20px;'>{service.ip}:{service.port} - {service.product} {service.version}</h3>"
-                
-                for vuln in service.vulnerabilities[:5]:  # Top 5 per service
-                    severity_class = vuln.severity.lower() if vuln.severity else 'low'
-                    vulns_html += f"""
-                    <div class="vulnerability-item">
-                        <span class="cve-id">{vuln.cve_id}</span>
-                        <span class="badge badge-{severity_class}" style="margin-left: 10px;">{vuln.severity}</span>
-                        <span style="margin-left: 10px; color: #f39c12;">CVSS: {vuln.cvss_score}</span>
-                        <p style="margin-top: 8px; color: #a0a0a0; font-size: 0.9em;">{vuln.description}</p>
-                    </div>
-                    """
-        
-        if not vulns_html:
-            vulns_html = "<p style='color: #666;'>No vulnerabilities detected</p>"
-        
-        return f"""
-        <div class="section">
-            <h2>⚠️ Known Vulnerabilities</h2>
-            {vulns_html}
         </div>
         """
     
