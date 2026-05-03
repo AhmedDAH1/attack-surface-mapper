@@ -6,12 +6,15 @@ Main entry point that orchestrates all scanning and analysis modules.
 
 import argparse
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from src.scanners.network_scanner import NetworkScanner
 from src.scanners.service_enumerator import ServiceEnumerator
 from src.scanners.config_auditor import ConfigAuditor
 from src.analyzers.mitre_mapper import MITREMapper
 from src.reporters.html_reporter import HTMLReporter
+from src.core.continuous_monitor import ContinuousMonitor
 
 
 def run_scan(target: str, ports: list = None, skip_enumeration: bool = False, 
@@ -178,26 +181,142 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     print("=" * 70)
 
 
+def run_monitor(target: str, interval: int, ports: list = None, 
+                skip_cve: bool = False, num_scans: int = None):
+    """
+    Run continuous monitoring mode.
+    
+    Args:
+        target: Target to monitor
+        interval: Scan interval in minutes
+        ports: Ports to scan
+        skip_cve: Skip CVE lookup
+        num_scans: Number of scans (None = infinite)
+    """
+    
+    print("=" * 70)
+    print("CONTINUOUS MONITORING MODE")
+    print("=" * 70)
+    print(f"Target: {target}")
+    print(f"Interval: {interval} minutes")
+    print(f"Press Ctrl+C to stop monitoring")
+    print("=" * 70)
+    print()
+    
+    # Initialize monitor
+    monitor = ContinuousMonitor(
+        target=target,
+        interval_minutes=interval,
+        alert_on_new_ports=True,
+        alert_on_new_vulns=True
+    )
+    
+    scan_count = 0
+    
+    try:
+        while True:
+            scan_count += 1
+            print(f"\n{'='*70}")
+            print(f"SCAN #{scan_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"{'='*70}\n")
+            
+            # Run full scan pipeline
+            scanner = NetworkScanner(timeout=1.0, max_workers=100)
+            scan_results = scanner.scan(target, ports)
+            
+            if scan_results:
+                # Service enumeration
+                targets = [(r.ip, r.port) for r in scan_results]
+                enumerator = ServiceEnumerator(use_cve_lookup=not skip_cve)
+                service_results = enumerator.enumerate_multiple(targets)
+                
+                # Configuration audit
+                audit_targets = []
+                for s in service_results:
+                    banner = None
+                    for scan_res in scan_results:
+                        if scan_res.ip == s.ip and scan_res.port == s.port:
+                            banner = scan_res.banner
+                            break
+                    audit_targets.append((s.ip, s.port, s.service, banner))
+                
+                auditor = ConfigAuditor()
+                config_issues = auditor.audit_multiple(audit_targets)
+                
+                # MITRE mapping (suppress output)
+                import sys
+                from io import StringIO
+                old_stdout = sys.stdout
+                sys.stdout = StringIO()
+                
+                mapper = MITREMapper()
+                mitre_findings = mapper.map_findings(service_results)
+                
+                sys.stdout = old_stdout
+                
+                # Process results and detect changes
+                print(f"\n{'='*70}")
+                print("CHANGE DETECTION")
+                print(f"{'='*70}")
+                changes = monitor.process_scan_results(
+                    scan_results, service_results, config_issues, mitre_findings
+                )
+                
+                if changes:
+                    print(f"\n⚠️  {len(changes)} CHANGE(S) DETECTED:")
+                    for change in changes:
+                        print(f"  [{change.severity}] {change.description}")
+                else:
+                    print("\n✅ No changes detected - attack surface stable")
+                
+                # Show summary
+                summary = monitor.get_summary()
+                print(f"\n📊 MONITORING SUMMARY:")
+                print(f"  Total scans: {summary['total_scans']}")
+                print(f"  Total alerts: {summary['total_alerts']}")
+                print(f"  Current state: {summary['current_state']['open_ports']} ports, "
+                      f"{summary['current_state']['vulnerabilities']} CVEs, "
+                      f"{summary['current_state']['critical_issues']} critical issues")
+            else:
+                print("\n[!] No open ports found in this scan")
+            
+            # Check if we've hit scan limit
+            if num_scans and scan_count >= num_scans:
+                print(f"\n✅ Completed {num_scans} scan(s)")
+                break
+            
+            # Wait for next scan
+            if not num_scans or scan_count < num_scans:
+                print(f"\n⏳ Next scan in {interval} minute(s)...")
+                print(f"   Press Ctrl+C to stop monitoring\n")
+                time.sleep(interval * 60)
+    
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Monitoring stopped by user")
+    
+    # Generate final diff report
+    print(f"\n{monitor.generate_diff_report()}")
+    
+    print("\n✅ Monitoring session complete")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Attack Surface Mapper - Discover and analyze security weaknesses',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Quick scan of common ports (generates HTML + JSON reports)
+  # Single scan
   python main.py scan 192.168.1.100
 
-  # Scan specific ports with full analysis
-  python main.py scan 192.168.1.100 -p 22,80,443,3306
+  # Continuous monitoring (scan every 60 minutes)
+  python main.py monitor 192.168.1.100 --interval 60
+
+  # Monitor with 3 scans then stop
+  python main.py monitor 192.168.1.100 -i 5 -n 3
   
-  # Scan network range, skip CVE lookup for speed
-  python main.py scan 192.168.1.0/24 --skip-cve
-  
-  # Full scan with custom report name
-  python main.py scan 192.168.1.100 -o my_company_scan
-  
-  # Fast scan (network discovery only)
-  python main.py scan 192.168.1.0/24 --skip-enum
+  # Monitor specific ports every 30 minutes
+  python main.py monitor 192.168.1.100 -i 30 -p 22,80,443
         """
     )
     
@@ -212,6 +331,17 @@ Examples:
     scan_parser.add_argument('--skip-cve', action='store_true',
                             help='Skip CVE lookup (faster)')
     scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json and .html)')
+    
+    # Monitor command
+    monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring mode')
+    monitor_parser.add_argument('target', help='Target IP or CIDR range to monitor')
+    monitor_parser.add_argument('-i', '--interval', type=int, default=60,
+                               help='Scan interval in minutes (default: 60)')
+    monitor_parser.add_argument('-p', '--ports', help='Comma-separated ports to monitor')
+    monitor_parser.add_argument('--skip-cve', action='store_true',
+                               help='Skip CVE lookup (faster scans)')
+    monitor_parser.add_argument('-n', '--num-scans', type=int,
+                               help='Number of scans to run (default: infinite)')
     
     args = parser.parse_args()
     
@@ -231,6 +361,20 @@ Examples:
             skip_enumeration=args.skip_enum,
             skip_cve=args.skip_cve,
             output=args.output
+        )
+    
+    elif args.command == 'monitor':
+        # Parse ports
+        ports = None
+        if args.ports:
+            ports = [int(p.strip()) for p in args.ports.split(',')]
+        
+        run_monitor(
+            target=args.target,
+            interval=args.interval,
+            ports=ports,
+            skip_cve=args.skip_cve,
+            num_scans=args.num_scans
         )
 
 
