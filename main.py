@@ -15,11 +15,13 @@ from src.scanners.config_auditor import ConfigAuditor
 from src.analyzers.mitre_mapper import MITREMapper
 from src.reporters.html_reporter import HTMLReporter
 from src.reporters.pdf_reporter import PDFReporter
+from src.reporters.csv_reporter import CSVReporter
+from src.integrations.slack_notifier import SlackNotifier
 from src.core.continuous_monitor import ContinuousMonitor
 
 
 def run_scan(target: str, ports: list = None, skip_enumeration: bool = False, 
-             skip_cve: bool = False, output: str = None):
+             skip_cve: bool = False, output: str = None, slack_webhook: str = None):
     """
     Run complete attack surface scan.
     
@@ -28,7 +30,8 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     2. Service Enumerator - Identify versions and CVEs
     3. Configuration Auditor - Check for misconfigurations
     4. MITRE Mapper - Map to ATT&CK framework
-    5. Report Generator - Create HTML, PDF, and JSON reports
+    5. Report Generator - Create JSON, HTML, PDF, and CSV reports
+    6. Slack Notifier - Send alerts (if webhook provided)
     """
     
     print("=" * 70)
@@ -106,10 +109,11 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             output_base = Path(output).stem
             output_base = f"reports/{output_base}"
         
-        # Generate JSON, HTML, and PDF reports
+        # Generate all report formats
         json_file = f"{output_base}.json"
         html_file = f"{output_base}.html"
         pdf_file = f"{output_base}.pdf"
+        csv_file = f"{output_base}.csv"
         
         # JSON export (for automation)
         mapper.export_json(json_file)
@@ -134,6 +138,16 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             output_file=pdf_file
         )
         
+        # CSV export (for spreadsheet analysis)
+        csv_reporter = CSVReporter()
+        csv_reporter.generate_report(
+            network_results=scan_results,
+            service_results=service_results,
+            mitre_findings=mitre_findings,
+            config_issues=config_issues,
+            output_file=csv_file
+        )
+        
         print()
         
         # Summary
@@ -144,6 +158,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print(f"Services enumerated: {len(service_results)}")
         
         # Configuration audit stats
+        config_summary = None
         if config_issues:
             config_summary = auditor.get_summary()
             print(f"\nConfiguration Issues: {config_summary['total_issues']}")
@@ -186,8 +201,22 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print(f"  • JSON: {json_file}")
         print(f"  • HTML: {html_file}")
         print(f"  • PDF: {pdf_file}")
+        print(f"  • CSV: {csv_file}")
+        
+        # Send Slack notification if webhook provided
+        if slack_webhook:
+            print(f"\n📢 Sending Slack notification...")
+            notifier = SlackNotifier(slack_webhook)
+            notifier.send_scan_complete(
+                target=target,
+                findings_count=len(mitre_findings),
+                critical_count=config_summary['by_severity']['critical'] if config_summary else 0,
+                high_count=config_summary['by_severity']['high'] if config_summary else 0
+            )
+        
         print(f"\n💡 Open the HTML report in your browser to view the interactive dashboard!")
         print(f"   Open the PDF report for a professional security assessment document!")
+        print(f"   Open the CSV in Excel/Google Sheets for detailed analysis!")
     
     print()
     print("=" * 70)
@@ -196,7 +225,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
 
 
 def run_monitor(target: str, interval: int, ports: list = None, 
-                skip_cve: bool = False, num_scans: int = None):
+                skip_cve: bool = False, num_scans: int = None, slack_webhook: str = None):
     """
     Run continuous monitoring mode.
     
@@ -206,6 +235,7 @@ def run_monitor(target: str, interval: int, ports: list = None,
         ports: Ports to scan
         skip_cve: Skip CVE lookup
         num_scans: Number of scans (None = infinite)
+        slack_webhook: Slack webhook URL for alerts
     """
     
     print("=" * 70)
@@ -213,17 +243,21 @@ def run_monitor(target: str, interval: int, ports: list = None,
     print("=" * 70)
     print(f"Target: {target}")
     print(f"Interval: {interval} minutes")
+    if slack_webhook:
+        print(f"Slack alerts: ENABLED")
     print(f"Press Ctrl+C to stop monitoring")
     print("=" * 70)
     print()
     
-    # Initialize monitor
+    # Initialize monitor and Slack notifier
     monitor = ContinuousMonitor(
         target=target,
         interval_minutes=interval,
         alert_on_new_ports=True,
         alert_on_new_vulns=True
     )
+    
+    notifier = SlackNotifier(slack_webhook) if slack_webhook else None
     
     scan_count = 0
     
@@ -290,6 +324,10 @@ def run_monitor(target: str, interval: int, ports: list = None,
                 print(f"\n⚠️  {len(changes)} CHANGE(S) DETECTED:")
                 for change in changes:
                     print(f"  [{change.severity}] {change.description}")
+                
+                # Send Slack alert for changes
+                if notifier:
+                    notifier.send_monitoring_change(target, changes)
             else:
                 print("\n✅ No changes detected - attack surface stable")
             
@@ -329,20 +367,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single scan (generates JSON, HTML, and PDF reports)
+  # Single scan (generates JSON, HTML, PDF, CSV reports)
   python main.py scan 192.168.1.100
+
+  # Scan with Slack notifications
+  python main.py scan 192.168.1.100 --slack-webhook https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 
   # Scan specific ports
   python main.py scan 192.168.1.100 -p 22,80,443,3306
 
-  # Continuous monitoring (scan every 60 minutes)
-  python main.py monitor 192.168.1.100 --interval 60
+  # Continuous monitoring with Slack alerts
+  python main.py monitor 192.168.1.100 -i 60 --slack-webhook https://hooks.slack.com/...
 
-  # Monitor with 3 scans then stop
+  # Monitor with limited scans
   python main.py monitor 127.0.0.1 -i 5 -n 3
-  
-  # Fast scan (skip enumeration)
-  python main.py scan 192.168.1.0/24 --skip-enum
         """
     )
     
@@ -356,7 +394,8 @@ Examples:
                             help='Skip service enumeration (faster)')
     scan_parser.add_argument('--skip-cve', action='store_true',
                             help='Skip CVE lookup (faster)')
-    scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json, .html, .pdf)')
+    scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json, .html, .pdf, .csv)')
+    scan_parser.add_argument('--slack-webhook', help='Slack webhook URL for notifications')
     
     # Monitor command
     monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring mode')
@@ -368,6 +407,7 @@ Examples:
                                help='Skip CVE lookup (faster scans)')
     monitor_parser.add_argument('-n', '--num-scans', type=int,
                                help='Number of scans to run (default: infinite)')
+    monitor_parser.add_argument('--slack-webhook', help='Slack webhook URL for change alerts')
     
     args = parser.parse_args()
     
@@ -386,7 +426,8 @@ Examples:
             ports=ports,
             skip_enumeration=args.skip_enum,
             skip_cve=args.skip_cve,
-            output=args.output
+            output=args.output,
+            slack_webhook=args.slack_webhook
         )
     
     elif args.command == 'monitor':
@@ -400,7 +441,8 @@ Examples:
             interval=args.interval,
             ports=ports,
             skip_cve=args.skip_cve,
-            num_scans=args.num_scans
+            num_scans=args.num_scans,
+            slack_webhook=args.slack_webhook
         )
 
 
