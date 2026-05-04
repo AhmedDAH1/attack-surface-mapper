@@ -14,6 +14,7 @@ from src.scanners.service_enumerator import ServiceEnumerator
 from src.scanners.config_auditor import ConfigAuditor
 from src.analyzers.mitre_mapper import MITREMapper
 from src.reporters.html_reporter import HTMLReporter
+from src.reporters.pdf_reporter import PDFReporter
 from src.core.continuous_monitor import ContinuousMonitor
 
 
@@ -27,7 +28,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     2. Service Enumerator - Identify versions and CVEs
     3. Configuration Auditor - Check for misconfigurations
     4. MITRE Mapper - Map to ATT&CK framework
-    5. Report Generator - Create HTML and JSON reports
+    5. Report Generator - Create HTML, PDF, and JSON reports
     """
     
     print("=" * 70)
@@ -105,9 +106,10 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             output_base = Path(output).stem
             output_base = f"reports/{output_base}"
         
-        # Generate both JSON and HTML reports
+        # Generate JSON, HTML, and PDF reports
         json_file = f"{output_base}.json"
         html_file = f"{output_base}.html"
+        pdf_file = f"{output_base}.pdf"
         
         # JSON export (for automation)
         mapper.export_json(json_file)
@@ -120,6 +122,16 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             mitre_findings=mitre_findings,
             config_issues=config_issues,
             output_file=html_file
+        )
+        
+        # PDF report (for distribution)
+        pdf_reporter = PDFReporter()
+        pdf_reporter.generate_report(
+            network_results=scan_results,
+            service_results=service_results,
+            mitre_findings=mitre_findings,
+            config_issues=config_issues,
+            output_file=pdf_file
         )
         
         print()
@@ -173,7 +185,9 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print(f"\n📊 Reports Generated:")
         print(f"  • JSON: {json_file}")
         print(f"  • HTML: {html_file}")
+        print(f"  • PDF: {pdf_file}")
         print(f"\n💡 Open the HTML report in your browser to view the interactive dashboard!")
+        print(f"   Open the PDF report for a professional security assessment document!")
     
     print()
     print("=" * 70)
@@ -224,6 +238,7 @@ def run_monitor(target: str, interval: int, ports: list = None,
             scanner = NetworkScanner(timeout=1.0, max_workers=100)
             scan_results = scanner.scan(target, ports)
             
+            # Always run change detection (even if no ports found)
             if scan_results:
                 # Service enumeration
                 targets = [(r.ip, r.port) for r in scan_results]
@@ -253,32 +268,40 @@ def run_monitor(target: str, interval: int, ports: list = None,
                 mitre_findings = mapper.map_findings(service_results)
                 
                 sys.stdout = old_stdout
-                
-                # Process results and detect changes
-                print(f"\n{'='*70}")
-                print("CHANGE DETECTION")
-                print(f"{'='*70}")
-                changes = monitor.process_scan_results(
-                    scan_results, service_results, config_issues, mitre_findings
-                )
-                
-                if changes:
-                    print(f"\n⚠️  {len(changes)} CHANGE(S) DETECTED:")
-                    for change in changes:
-                        print(f"  [{change.severity}] {change.description}")
-                else:
-                    print("\n✅ No changes detected - attack surface stable")
-                
-                # Show summary
-                summary = monitor.get_summary()
-                print(f"\n📊 MONITORING SUMMARY:")
-                print(f"  Total scans: {summary['total_scans']}")
-                print(f"  Total alerts: {summary['total_alerts']}")
+            else:
+                # No ports found - use empty results
+                service_results = []
+                config_issues = []
+                mitre_findings = []
+                print("\n[!] No open ports found in this scan")
+            
+            # Always process changes (detect closed ports too)
+            print(f"\n{'='*70}")
+            print("CHANGE DETECTION")
+            print(f"{'='*70}")
+            changes = monitor.process_scan_results(
+                scan_results if scan_results else [], 
+                service_results, 
+                config_issues, 
+                mitre_findings
+            )
+            
+            if changes:
+                print(f"\n⚠️  {len(changes)} CHANGE(S) DETECTED:")
+                for change in changes:
+                    print(f"  [{change.severity}] {change.description}")
+            else:
+                print("\n✅ No changes detected - attack surface stable")
+            
+            # Show summary
+            summary = monitor.get_summary()
+            print(f"\n📊 MONITORING SUMMARY:")
+            print(f"  Total scans: {summary['total_scans']}")
+            print(f"  Total alerts: {summary['total_alerts']}")
+            if summary.get('current_state'):
                 print(f"  Current state: {summary['current_state']['open_ports']} ports, "
                       f"{summary['current_state']['vulnerabilities']} CVEs, "
                       f"{summary['current_state']['critical_issues']} critical issues")
-            else:
-                print("\n[!] No open ports found in this scan")
             
             # Check if we've hit scan limit
             if num_scans and scan_count >= num_scans:
@@ -306,17 +329,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single scan
+  # Single scan (generates JSON, HTML, and PDF reports)
   python main.py scan 192.168.1.100
+
+  # Scan specific ports
+  python main.py scan 192.168.1.100 -p 22,80,443,3306
 
   # Continuous monitoring (scan every 60 minutes)
   python main.py monitor 192.168.1.100 --interval 60
 
   # Monitor with 3 scans then stop
-  python main.py monitor 192.168.1.100 -i 5 -n 3
+  python main.py monitor 127.0.0.1 -i 5 -n 3
   
-  # Monitor specific ports every 30 minutes
-  python main.py monitor 192.168.1.100 -i 30 -p 22,80,443
+  # Fast scan (skip enumeration)
+  python main.py scan 192.168.1.0/24 --skip-enum
         """
     )
     
@@ -330,7 +356,7 @@ Examples:
                             help='Skip service enumeration (faster)')
     scan_parser.add_argument('--skip-cve', action='store_true',
                             help='Skip CVE lookup (faster)')
-    scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json and .html)')
+    scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json, .html, .pdf)')
     
     # Monitor command
     monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring mode')
