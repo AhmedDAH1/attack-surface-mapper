@@ -17,11 +17,14 @@ from src.reporters.html_reporter import HTMLReporter
 from src.reporters.pdf_reporter import PDFReporter
 from src.reporters.csv_reporter import CSVReporter
 from src.integrations.slack_notifier import SlackNotifier
+from src.integrations.shodan_checker import ShodanChecker
+from src.integrations.virustotal_checker import VirusTotalChecker
 from src.core.continuous_monitor import ContinuousMonitor
 
 
 def run_scan(target: str, ports: list = None, skip_enumeration: bool = False, 
-             skip_cve: bool = False, output: str = None, slack_webhook: str = None):
+             skip_cve: bool = False, output: str = None, slack_webhook: str = None,
+             shodan_key: str = None, vt_key: str = None):
     """
     Run complete attack surface scan.
     
@@ -30,8 +33,9 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     2. Service Enumerator - Identify versions and CVEs
     3. Configuration Auditor - Check for misconfigurations
     4. MITRE Mapper - Map to ATT&CK framework
-    5. Report Generator - Create JSON, HTML, PDF, and CSV reports
-    6. Slack Notifier - Send alerts (if webhook provided)
+    5. Threat Intelligence - Shodan & VirusTotal checks
+    6. Report Generator - Create JSON, HTML, PDF, and CSV reports
+    7. Slack Notifier - Send alerts (if webhook provided)
     """
     
     print("=" * 70)
@@ -55,6 +59,8 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     mitre_findings = []
     service_results = []
     config_issues = []
+    shodan_results = []
+    vt_results = []
     
     if not skip_enumeration:
         print("[PHASE 2] Service Enumeration")
@@ -96,6 +102,43 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         mitre_findings = mapper.map_findings(service_results)
         
         print()
+        
+        # Phase 3.5: Threat Intelligence
+        if shodan_key or vt_key:
+            print("[PHASE 3.5] Threat Intelligence")
+            print("-" * 70)
+            
+            # Shodan check
+            if shodan_key:
+                try:
+                    shodan = ShodanChecker(shodan_key)
+                    targets_for_shodan = [(r.ip, r.port) for r in scan_results]
+                    shodan_results = shodan.check_multiple(targets_for_shodan)
+                    
+                    shodan_summary = shodan.get_summary()
+                    if shodan_summary['globally_exposed'] > 0:
+                        print(f"\n[!] SHODAN ALERT: {shodan_summary['globally_exposed']} IP(s) exposed globally!")
+                        print(f"    Total exposed ports across all IPs: {shodan_summary['total_exposed_ports']}")
+                except Exception as e:
+                    print(f"[!] Shodan check failed: {e}")
+            
+            # VirusTotal check
+            if vt_key:
+                try:
+                    vt = VirusTotalChecker(vt_key)
+                    unique_ips = list(set(r.ip for r in scan_results))
+                    vt_results = vt.check_multiple_ips(unique_ips)
+                    
+                    vt_summary = vt.get_summary()
+                    if vt_summary['malicious'] > 0:
+                        print(f"\n[!] VIRUSTOTAL ALERT: {vt_summary['malicious']} malicious IP(s) detected!")
+                        print(f"    Flagged IPs: {', '.join(vt_summary['malicious_ips'])}")
+                    
+                    vt.close()
+                except Exception as e:
+                    print(f"[!] VirusTotal check failed: {e}")
+            
+            print()
         
         # Phase 4: Report Generation
         print("[PHASE 4] Report Generation")
@@ -196,6 +239,20 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
                         print(f"\n  {service.ip}:{service.port} - {service.product} {service.version}")
                         for vuln in service.vulnerabilities[:2]:
                             print(f"    • {vuln.cve_id} [{vuln.severity}] CVSS: {vuln.cvss_score}")
+        
+        # Threat Intelligence stats
+        if shodan_key or vt_key:
+            print(f"\nThreat Intelligence:")
+            if shodan_key and shodan_results:
+                shodan_summary = shodan.get_summary()
+                print(f"  Shodan - Globally Exposed: {shodan_summary['globally_exposed']}/{shodan_summary['total_ips_checked']}")
+                if shodan_summary['globally_exposed'] > 0:
+                    print(f"    Exposed IPs: {', '.join(shodan_summary['exposed_ips'])}")
+            if vt_key and vt_results:
+                vt_summary = vt.get_summary()
+                print(f"  VirusTotal - Malicious IPs: {vt_summary['malicious']}/{vt_summary['total_checked']}")
+                if vt_summary['malicious'] > 0:
+                    print(f"    Flagged IPs: {', '.join(vt_summary['malicious_ips'])}")
         
         print(f"\n📊 Reports Generated:")
         print(f"  • JSON: {json_file}")
@@ -367,20 +424,26 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single scan (generates JSON, HTML, PDF, CSV reports)
+  # Basic scan
   python main.py scan 192.168.1.100
 
-  # Scan with Slack notifications
-  python main.py scan 192.168.1.100 --slack-webhook https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+  # Scan with threat intelligence
+  python main.py scan 8.8.8.8 --shodan-key YOUR_KEY --vt-key YOUR_KEY
 
-  # Scan specific ports
-  python main.py scan 192.168.1.100 -p 22,80,443,3306
+  # Full featured scan
+  python main.py scan 192.168.1.100 \\
+    -p 22,80,443 \\
+    --shodan-key YOUR_KEY \\
+    --vt-key YOUR_KEY \\
+    --slack-webhook https://hooks.slack.com/... \\
+    -o my_scan
 
-  # Continuous monitoring with Slack alerts
+  # Continuous monitoring
   python main.py monitor 192.168.1.100 -i 60 --slack-webhook https://hooks.slack.com/...
 
-  # Monitor with limited scans
-  python main.py monitor 127.0.0.1 -i 5 -n 3
+API Keys:
+  Shodan: https://account.shodan.io/register (Free: 100 queries/month)
+  VirusTotal: https://www.virustotal.com/gui/join-us (Free: 500 requests/day)
         """
     )
     
@@ -396,6 +459,8 @@ Examples:
                             help='Skip CVE lookup (faster)')
     scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json, .html, .pdf, .csv)')
     scan_parser.add_argument('--slack-webhook', help='Slack webhook URL for notifications')
+    scan_parser.add_argument('--shodan-key', help='Shodan API key for global exposure check')
+    scan_parser.add_argument('--vt-key', help='VirusTotal API key for IP reputation check')
     
     # Monitor command
     monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring mode')
@@ -427,7 +492,9 @@ Examples:
             skip_enumeration=args.skip_enum,
             skip_cve=args.skip_cve,
             output=args.output,
-            slack_webhook=args.slack_webhook
+            slack_webhook=args.slack_webhook,
+            shodan_key=args.shodan_key,
+            vt_key=args.vt_key
         )
     
     elif args.command == 'monitor':
