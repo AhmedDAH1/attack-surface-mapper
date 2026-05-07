@@ -13,6 +13,7 @@ from src.scanners.network_scanner import NetworkScanner
 from src.scanners.service_enumerator import ServiceEnumerator
 from src.scanners.config_auditor import ConfigAuditor
 from src.analyzers.mitre_mapper import MITREMapper
+from src.analyzers.compliance_checker import ComplianceChecker
 from src.reporters.html_reporter import HTMLReporter
 from src.reporters.pdf_reporter import PDFReporter
 from src.reporters.csv_reporter import CSVReporter
@@ -26,16 +27,17 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
              skip_cve: bool = False, output: str = None, slack_webhook: str = None,
              shodan_key: str = None, vt_key: str = None):
     """
-    Run complete attack surface scan.
+    Run complete attack surface scan with compliance checking.
     
     Pipeline:
     1. Network Scanner - Discover open ports
     2. Service Enumerator - Identify versions and CVEs
     3. Configuration Auditor - Check for misconfigurations
     4. MITRE Mapper - Map to ATT&CK framework
-    5. Threat Intelligence - Shodan & VirusTotal checks
-    6. Report Generator - Create JSON, HTML, PDF, and CSV reports
-    7. Slack Notifier - Send alerts (if webhook provided)
+    5. Compliance Checker - PCI-DSS, NIST, CIS analysis
+    6. Threat Intelligence - Shodan & VirusTotal checks
+    7. Report Generator - Create JSON, HTML, PDF, CSV reports
+    8. Slack Notifier - Send alerts
     """
     
     print("=" * 70)
@@ -55,10 +57,11 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     
     print()
     
-    # Phase 2: Service Enumeration (optional)
+    # Initialize variables
     mitre_findings = []
     service_results = []
     config_issues = []
+    compliance_violations = []
     shodan_results = []
     vt_results = []
     
@@ -66,7 +69,6 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print("[PHASE 2] Service Enumeration")
         print("-" * 70)
         
-        # Convert scan results to (ip, port) tuples
         targets = [(r.ip, r.port) for r in scan_results]
         
         enumerator = ServiceEnumerator(use_cve_lookup=not skip_cve)
@@ -78,11 +80,9 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print("[PHASE 2.5] Configuration Audit")
         print("-" * 70)
         
-        # Prepare data for auditor (ip, port, service, banner)
         audit_targets = []
         for s in service_results:
             banner = None
-            # Try to get banner from original scan results
             for scan_res in scan_results:
                 if scan_res.ip == s.ip and scan_res.port == s.port:
                     banner = scan_res.banner
@@ -103,12 +103,31 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         
         print()
         
+        # Phase 3.7: Compliance Checking
+        print("[PHASE 3.7] Compliance Framework Analysis")
+        print("-" * 70)
+        
+        compliance = ComplianceChecker()
+        compliance_violations = compliance.check_compliance(
+            config_issues=config_issues,
+            mitre_findings=mitre_findings,
+            service_results=service_results
+        )
+        
+        compliance_summary = compliance.get_summary()
+        print(f"\n📊 Compliance Score: {compliance_summary['compliance_score']}/100")
+        if compliance_summary['total_violations'] > 0:
+            print(f"⚠️  Found {compliance_summary['total_violations']} compliance violation(s)")
+        else:
+            print(f"✅ No compliance violations detected")
+        
+        print()
+        
         # Phase 3.5: Threat Intelligence
         if shodan_key or vt_key:
             print("[PHASE 3.5] Threat Intelligence")
             print("-" * 70)
             
-            # Shodan check
             if shodan_key:
                 try:
                     shodan = ShodanChecker(shodan_key)
@@ -117,12 +136,10 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
                     
                     shodan_summary = shodan.get_summary()
                     if shodan_summary['globally_exposed'] > 0:
-                        print(f"\n[!] SHODAN ALERT: {shodan_summary['globally_exposed']} IP(s) exposed globally!")
-                        print(f"    Total exposed ports across all IPs: {shodan_summary['total_exposed_ports']}")
+                        print(f"\n[!] SHODAN: {shodan_summary['globally_exposed']} IP(s) exposed globally!")
                 except Exception as e:
                     print(f"[!] Shodan check failed: {e}")
             
-            # VirusTotal check
             if vt_key:
                 try:
                     vt = VirusTotalChecker(vt_key)
@@ -131,8 +148,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
                     
                     vt_summary = vt.get_summary()
                     if vt_summary['malicious'] > 0:
-                        print(f"\n[!] VIRUSTOTAL ALERT: {vt_summary['malicious']} malicious IP(s) detected!")
-                        print(f"    Flagged IPs: {', '.join(vt_summary['malicious_ips'])}")
+                        print(f"\n[!] VIRUSTOTAL: {vt_summary['malicious']} malicious IP(s) detected!")
                     
                     vt.close()
                 except Exception as e:
@@ -144,7 +160,6 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print("[PHASE 4] Report Generation")
         print("-" * 70)
         
-        # Generate output filename if not provided
         if not output:
             timestamp = Path(f"reports/scan_{target.replace('/', '_')}").stem
             output_base = f"reports/attack_surface_{timestamp}"
@@ -152,16 +167,14 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             output_base = Path(output).stem
             output_base = f"reports/{output_base}"
         
-        # Generate all report formats
         json_file = f"{output_base}.json"
         html_file = f"{output_base}.html"
         pdf_file = f"{output_base}.pdf"
         csv_file = f"{output_base}.csv"
         
-        # JSON export (for automation)
+        # Generate reports
         mapper.export_json(json_file)
         
-        # HTML report (for viewing)
         reporter = HTMLReporter()
         reporter.generate_report(
             network_results=scan_results,
@@ -171,7 +184,6 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             output_file=html_file
         )
         
-        # PDF report (for distribution)
         pdf_reporter = PDFReporter()
         pdf_reporter.generate_report(
             network_results=scan_results,
@@ -181,7 +193,6 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             output_file=pdf_file
         )
         
-        # CSV export (for spreadsheet analysis)
         csv_reporter = CSVReporter()
         csv_reporter.generate_report(
             network_results=scan_results,
@@ -217,7 +228,6 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             print(f"  Techniques identified: {attack_summary['unique_techniques']}")
             print(f"  Tactics covered: {len(attack_summary['tactics_covered'])}")
             
-            # Risk breakdown
             risk_dist = attack_summary['risk_distribution']
             print(f"\nRisk Distribution:")
             print(f"  Critical (≥7.0): {risk_dist['critical']}")
@@ -231,14 +241,17 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             print(f"\nVulnerability Summary:")
             print(f"  Services with CVEs: {services_with_vulns}")
             print(f"  Total CVEs found: {total_cves}")
-            
-            if total_cves > 0:
-                print("\n[!] Top Vulnerabilities:")
-                for service in service_results:
-                    if service.vulnerabilities:
-                        print(f"\n  {service.ip}:{service.port} - {service.product} {service.version}")
-                        for vuln in service.vulnerabilities[:2]:
-                            print(f"    • {vuln.cve_id} [{vuln.severity}] CVSS: {vuln.cvss_score}")
+        
+        # Compliance stats
+        if compliance_violations:
+            print(f"\nCompliance Analysis:")
+            print(f"  Overall Score: {compliance_summary['compliance_score']}/100")
+            print(f"  Total Violations: {compliance_summary['total_violations']}")
+            print(f"  By Severity - Critical: {compliance_summary['by_severity']['CRITICAL']}, "
+                  f"High: {compliance_summary['by_severity']['HIGH']}, "
+                  f"Medium: {compliance_summary['by_severity']['MEDIUM']}")
+            for framework, count in compliance_summary['by_framework'].items():
+                print(f"    {framework}: {count} violation(s)")
         
         # Threat Intelligence stats
         if shodan_key or vt_key:
@@ -246,13 +259,9 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
             if shodan_key and shodan_results:
                 shodan_summary = shodan.get_summary()
                 print(f"  Shodan - Globally Exposed: {shodan_summary['globally_exposed']}/{shodan_summary['total_ips_checked']}")
-                if shodan_summary['globally_exposed'] > 0:
-                    print(f"    Exposed IPs: {', '.join(shodan_summary['exposed_ips'])}")
             if vt_key and vt_results:
                 vt_summary = vt.get_summary()
                 print(f"  VirusTotal - Malicious IPs: {vt_summary['malicious']}/{vt_summary['total_checked']}")
-                if vt_summary['malicious'] > 0:
-                    print(f"    Flagged IPs: {', '.join(vt_summary['malicious_ips'])}")
         
         print(f"\n📊 Reports Generated:")
         print(f"  • JSON: {json_file}")
@@ -260,7 +269,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
         print(f"  • PDF: {pdf_file}")
         print(f"  • CSV: {csv_file}")
         
-        # Send Slack notification if webhook provided
+        # Slack notification
         if slack_webhook:
             print(f"\n📢 Sending Slack notification...")
             notifier = SlackNotifier(slack_webhook)
@@ -271,9 +280,9 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
                 high_count=config_summary['by_severity']['high'] if config_summary else 0
             )
         
-        print(f"\n💡 Open the HTML report in your browser to view the interactive dashboard!")
-        print(f"   Open the PDF report for a professional security assessment document!")
-        print(f"   Open the CSV in Excel/Google Sheets for detailed analysis!")
+        # Print executive summary if compliance violations
+        if compliance_violations and len(compliance_violations) > 0:
+            print(f"\n{compliance.generate_executive_summary()}")
     
     print()
     print("=" * 70)
@@ -283,17 +292,7 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
 
 def run_monitor(target: str, interval: int, ports: list = None, 
                 skip_cve: bool = False, num_scans: int = None, slack_webhook: str = None):
-    """
-    Run continuous monitoring mode.
-    
-    Args:
-        target: Target to monitor
-        interval: Scan interval in minutes
-        ports: Ports to scan
-        skip_cve: Skip CVE lookup
-        num_scans: Number of scans (None = infinite)
-        slack_webhook: Slack webhook URL for alerts
-    """
+    """Run continuous monitoring mode"""
     
     print("=" * 70)
     print("CONTINUOUS MONITORING MODE")
@@ -306,7 +305,6 @@ def run_monitor(target: str, interval: int, ports: list = None,
     print("=" * 70)
     print()
     
-    # Initialize monitor and Slack notifier
     monitor = ContinuousMonitor(
         target=target,
         interval_minutes=interval,
@@ -315,7 +313,6 @@ def run_monitor(target: str, interval: int, ports: list = None,
     )
     
     notifier = SlackNotifier(slack_webhook) if slack_webhook else None
-    
     scan_count = 0
     
     try:
@@ -325,18 +322,14 @@ def run_monitor(target: str, interval: int, ports: list = None,
             print(f"SCAN #{scan_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"{'='*70}\n")
             
-            # Run full scan pipeline
             scanner = NetworkScanner(timeout=1.0, max_workers=100)
             scan_results = scanner.scan(target, ports)
             
-            # Always run change detection (even if no ports found)
             if scan_results:
-                # Service enumeration
                 targets = [(r.ip, r.port) for r in scan_results]
                 enumerator = ServiceEnumerator(use_cve_lookup=not skip_cve)
                 service_results = enumerator.enumerate_multiple(targets)
                 
-                # Configuration audit
                 audit_targets = []
                 for s in service_results:
                     banner = None
@@ -349,7 +342,6 @@ def run_monitor(target: str, interval: int, ports: list = None,
                 auditor = ConfigAuditor()
                 config_issues = auditor.audit_multiple(audit_targets)
                 
-                # MITRE mapping (suppress output)
                 import sys
                 from io import StringIO
                 old_stdout = sys.stdout
@@ -360,13 +352,11 @@ def run_monitor(target: str, interval: int, ports: list = None,
                 
                 sys.stdout = old_stdout
             else:
-                # No ports found - use empty results
                 service_results = []
                 config_issues = []
                 mitre_findings = []
                 print("\n[!] No open ports found in this scan")
             
-            # Always process changes (detect closed ports too)
             print(f"\n{'='*70}")
             print("CHANGE DETECTION")
             print(f"{'='*70}")
@@ -382,13 +372,11 @@ def run_monitor(target: str, interval: int, ports: list = None,
                 for change in changes:
                     print(f"  [{change.severity}] {change.description}")
                 
-                # Send Slack alert for changes
                 if notifier:
                     notifier.send_monitoring_change(target, changes)
             else:
                 print("\n✅ No changes detected - attack surface stable")
             
-            # Show summary
             summary = monitor.get_summary()
             print(f"\n📊 MONITORING SUMMARY:")
             print(f"  Total scans: {summary['total_scans']}")
@@ -398,12 +386,10 @@ def run_monitor(target: str, interval: int, ports: list = None,
                       f"{summary['current_state']['vulnerabilities']} CVEs, "
                       f"{summary['current_state']['critical_issues']} critical issues")
             
-            # Check if we've hit scan limit
             if num_scans and scan_count >= num_scans:
                 print(f"\n✅ Completed {num_scans} scan(s)")
                 break
             
-            # Wait for next scan
             if not num_scans or scan_count < num_scans:
                 print(f"\n⏳ Next scan in {interval} minute(s)...")
                 print(f"   Press Ctrl+C to stop monitoring\n")
@@ -412,67 +398,50 @@ def run_monitor(target: str, interval: int, ports: list = None,
     except KeyboardInterrupt:
         print("\n\n⚠️  Monitoring stopped by user")
     
-    # Generate final diff report
     print(f"\n{monitor.generate_diff_report()}")
-    
     print("\n✅ Monitoring session complete")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Attack Surface Mapper - Discover and analyze security weaknesses',
+        description='Attack Surface Mapper - Enterprise Security Assessment Tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic scan
+  # Basic scan with compliance checking
   python main.py scan 192.168.1.100
 
-  # Scan with threat intelligence
-  python main.py scan 8.8.8.8 --shodan-key YOUR_KEY --vt-key YOUR_KEY
-
-  # Full featured scan
+  # Full enterprise scan
   python main.py scan 192.168.1.100 \\
-    -p 22,80,443 \\
     --shodan-key YOUR_KEY \\
     --vt-key YOUR_KEY \\
     --slack-webhook https://hooks.slack.com/... \\
-    -o my_scan
+    -o enterprise_scan
 
   # Continuous monitoring
-  python main.py monitor 192.168.1.100 -i 60 --slack-webhook https://hooks.slack.com/...
-
-API Keys:
-  Shodan: https://account.shodan.io/register (Free: 100 queries/month)
-  VirusTotal: https://www.virustotal.com/gui/join-us (Free: 500 requests/day)
+  python main.py monitor 192.168.1.0/24 -i 60 --slack-webhook https://hooks.slack.com/...
         """
     )
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    # Scan command
     scan_parser = subparsers.add_parser('scan', help='Run attack surface scan')
     scan_parser.add_argument('target', help='Target IP or CIDR range')
-    scan_parser.add_argument('-p', '--ports', help='Comma-separated ports (default: common ports)')
-    scan_parser.add_argument('--skip-enum', action='store_true', 
-                            help='Skip service enumeration (faster)')
-    scan_parser.add_argument('--skip-cve', action='store_true',
-                            help='Skip CVE lookup (faster)')
-    scan_parser.add_argument('-o', '--output', help='Report base name (auto-generates .json, .html, .pdf, .csv)')
-    scan_parser.add_argument('--slack-webhook', help='Slack webhook URL for notifications')
-    scan_parser.add_argument('--shodan-key', help='Shodan API key for global exposure check')
-    scan_parser.add_argument('--vt-key', help='VirusTotal API key for IP reputation check')
+    scan_parser.add_argument('-p', '--ports', help='Comma-separated ports')
+    scan_parser.add_argument('--skip-enum', action='store_true', help='Skip enumeration')
+    scan_parser.add_argument('--skip-cve', action='store_true', help='Skip CVE lookup')
+    scan_parser.add_argument('-o', '--output', help='Report base name')
+    scan_parser.add_argument('--slack-webhook', help='Slack webhook URL')
+    scan_parser.add_argument('--shodan-key', help='Shodan API key')
+    scan_parser.add_argument('--vt-key', help='VirusTotal API key')
     
-    # Monitor command
-    monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring mode')
-    monitor_parser.add_argument('target', help='Target IP or CIDR range to monitor')
-    monitor_parser.add_argument('-i', '--interval', type=int, default=60,
-                               help='Scan interval in minutes (default: 60)')
-    monitor_parser.add_argument('-p', '--ports', help='Comma-separated ports to monitor')
-    monitor_parser.add_argument('--skip-cve', action='store_true',
-                               help='Skip CVE lookup (faster scans)')
-    monitor_parser.add_argument('-n', '--num-scans', type=int,
-                               help='Number of scans to run (default: infinite)')
-    monitor_parser.add_argument('--slack-webhook', help='Slack webhook URL for change alerts')
+    monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring')
+    monitor_parser.add_argument('target', help='Target to monitor')
+    monitor_parser.add_argument('-i', '--interval', type=int, default=60, help='Interval (minutes)')
+    monitor_parser.add_argument('-p', '--ports', help='Ports to monitor')
+    monitor_parser.add_argument('--skip-cve', action='store_true', help='Skip CVE lookup')
+    monitor_parser.add_argument('-n', '--num-scans', type=int, help='Number of scans')
+    monitor_parser.add_argument('--slack-webhook', help='Slack webhook URL')
     
     args = parser.parse_args()
     
@@ -481,7 +450,6 @@ API Keys:
         sys.exit(1)
     
     if args.command == 'scan':
-        # Parse ports
         ports = None
         if args.ports:
             ports = [int(p.strip()) for p in args.ports.split(',')]
@@ -498,7 +466,6 @@ API Keys:
         )
     
     elif args.command == 'monitor':
-        # Parse ports
         ports = None
         if args.ports:
             ports = [int(p.strip()) for p in args.ports.split(',')]
