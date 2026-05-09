@@ -21,6 +21,7 @@ from src.integrations.slack_notifier import SlackNotifier
 from src.integrations.shodan_checker import ShodanChecker
 from src.integrations.virustotal_checker import VirusTotalChecker
 from src.core.continuous_monitor import ContinuousMonitor
+from src.core.live_dashboard import LiveDashboard
 
 
 def run_scan(target: str, ports: list = None, skip_enumeration: bool = False, 
@@ -290,6 +291,257 @@ def run_scan(target: str, ports: list = None, skip_enumeration: bool = False,
     print("=" * 70)
 
 
+def run_scan_with_dashboard(target: str, ports: list = None, skip_cve: bool = False,
+                           output: str = None, shodan_key: str = None, vt_key: str = None):
+    """
+    Run scan with live interactive dashboard.
+    """
+    from rich.live import Live
+    import sys
+    from io import StringIO
+    
+    dashboard = LiveDashboard()
+    dashboard.start_scan(target)
+    
+    # Start live display
+    with Live(dashboard.render(), refresh_per_second=4, console=dashboard.console) as live:
+        
+        # Phase 1: Network Scanning
+        dashboard.add_finding("Starting network discovery...", "LOW")
+        live.update(dashboard.render())
+        
+        scanner = NetworkScanner(timeout=1.0, max_workers=100)
+        scan_results = scanner.scan(target, ports)
+        
+        if not scan_results:
+            dashboard.add_finding("No open ports found", "LOW")
+            live.update(dashboard.render())
+            time.sleep(2)
+            return
+        
+        # Update stats
+        dashboard.update_stats(
+            ports_scanned=len(scan_results) if ports is None else len(ports),
+            ports_open=len(scan_results)
+        )
+        
+        for result in scan_results:
+            dashboard.add_finding(f"Port {result.port} open - {result.service}", "LOW")
+        
+        live.update(dashboard.render())
+        
+        # Phase 2: Service Enumeration
+        dashboard.add_finding("Enumerating services...", "LOW")
+        live.update(dashboard.render())
+        
+        targets = [(r.ip, r.port) for r in scan_results]
+        enumerator = ServiceEnumerator(use_cve_lookup=not skip_cve)
+        
+        # Suppress enumeration output
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        service_results = enumerator.enumerate_multiple(targets)
+        sys.stdout = old_stdout
+        
+        dashboard.update_stats(services_found=len(service_results))
+        
+        # Count vulnerabilities
+        total_vulns = sum(len(s.vulnerabilities) for s in service_results)
+        dashboard.update_stats(vulnerabilities=total_vulns)
+        
+        for service in service_results:
+            if service.vulnerabilities:
+                dashboard.add_finding(
+                    f"{service.ip}:{service.port} - {len(service.vulnerabilities)} CVE(s) found",
+                    "HIGH"
+                )
+        
+        live.update(dashboard.render())
+        
+        # Phase 2.5: Configuration Audit
+        dashboard.add_finding("Auditing configurations...", "LOW")
+        live.update(dashboard.render())
+        
+        audit_targets = []
+        for s in service_results:
+            banner = None
+            for scan_res in scan_results:
+                if scan_res.ip == s.ip and scan_res.port == s.port:
+                    banner = scan_res.banner
+                    break
+            audit_targets.append((s.ip, s.port, s.service, banner))
+        
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        auditor = ConfigAuditor()
+        config_issues = auditor.audit_multiple(audit_targets)
+        sys.stdout = old_stdout
+        
+        # Count issues by severity
+        critical_count = len([c for c in config_issues if c.severity == 'CRITICAL'])
+        high_count = len([c for c in config_issues if c.severity == 'HIGH'])
+        
+        dashboard.update_stats(
+            critical_issues=critical_count,
+            high_issues=high_count
+        )
+        
+        for issue in config_issues:
+            dashboard.add_finding(
+                f"{issue.ip}:{issue.port} - {issue.title}",
+                issue.severity
+            )
+        
+        live.update(dashboard.render())
+        
+        # Phase 3: MITRE Mapping
+        dashboard.add_finding("Mapping to MITRE ATT&CK...", "LOW")
+        live.update(dashboard.render())
+        
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        mapper = MITREMapper()
+        mitre_findings = mapper.map_findings(service_results)
+        sys.stdout = old_stdout
+        
+        live.update(dashboard.render())
+        
+        # Phase 3.7: Compliance
+        dashboard.add_finding("Checking compliance...", "LOW")
+        live.update(dashboard.render())
+        
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        compliance = ComplianceChecker()
+        compliance_violations = compliance.check_compliance(
+            config_issues=config_issues,
+            mitre_findings=mitre_findings,
+            service_results=service_results
+        )
+        sys.stdout = old_stdout
+        
+        compliance_summary = compliance.get_summary()
+        dashboard.update_stats(compliance_score=compliance_summary['compliance_score'])
+        
+        live.update(dashboard.render())
+        
+        # Threat Intelligence (if keys provided)
+        if shodan_key or vt_key:
+            dashboard.add_finding("Checking threat intelligence...", "LOW")
+            live.update(dashboard.render())
+            
+            if shodan_key:
+                try:
+                    old_stdout = sys.stdout
+                    sys.stdout = StringIO()
+                    shodan = ShodanChecker(shodan_key)
+                    targets_for_shodan = [(r.ip, r.port) for r in scan_results]
+                    shodan_results = shodan.check_multiple(targets_for_shodan)
+                    sys.stdout = old_stdout
+                    
+                    shodan_summary = shodan.get_summary()
+                    if shodan_summary['globally_exposed'] > 0:
+                        dashboard.add_finding(
+                            f"{shodan_summary['globally_exposed']} IP(s) exposed on Shodan",
+                            "CRITICAL"
+                        )
+                except:
+                    pass
+            
+            if vt_key:
+                try:
+                    old_stdout = sys.stdout
+                    sys.stdout = StringIO()
+                    vt = VirusTotalChecker(vt_key)
+                    unique_ips = list(set(r.ip for r in scan_results))
+                    vt_results = vt.check_multiple_ips(unique_ips)
+                    vt.close()
+                    sys.stdout = old_stdout
+                    
+                    vt_summary = vt.get_summary()
+                    if vt_summary['malicious'] > 0:
+                        dashboard.add_finding(
+                            f"{vt_summary['malicious']} malicious IP(s) detected",
+                            "CRITICAL"
+                        )
+                except:
+                    pass
+            
+            live.update(dashboard.render())
+        
+        # Generate reports
+        dashboard.add_finding("Generating reports...", "LOW")
+        live.update(dashboard.render())
+        
+        if not output:
+            timestamp = Path(f"reports/scan_{target.replace('/', '_')}").stem
+            output_base = f"reports/attack_surface_{timestamp}"
+        else:
+            output_base = Path(output).stem
+            output_base = f"reports/{output_base}"
+        
+        json_file = f"{output_base}.json"
+        html_file = f"{output_base}.html"
+        pdf_file = f"{output_base}.pdf"
+        csv_file = f"{output_base}.csv"
+        
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        
+        mapper.export_json(json_file)
+        
+        reporter = HTMLReporter()
+        reporter.generate_report(
+            network_results=scan_results,
+            service_results=service_results,
+            mitre_findings=mitre_findings,
+            config_issues=config_issues,
+            output_file=html_file
+        )
+        
+        pdf_reporter = PDFReporter()
+        pdf_reporter.generate_report(
+            network_results=scan_results,
+            service_results=service_results,
+            mitre_findings=mitre_findings,
+            config_issues=config_issues,
+            output_file=pdf_file
+        )
+        
+        csv_reporter = CSVReporter()
+        csv_reporter.generate_report(
+            network_results=scan_results,
+            service_results=service_results,
+            mitre_findings=mitre_findings,
+            config_issues=config_issues,
+            output_file=csv_file
+        )
+        
+        sys.stdout = old_stdout
+        
+        dashboard.add_finding("Reports generated successfully!", "LOW")
+        live.update(dashboard.render())
+        
+        # Hold for 3 seconds to show final state
+        time.sleep(3)
+    
+    # Print summary
+    print("\n" + "="*70)
+    print("SCAN COMPLETE")
+    print("="*70)
+    print(f"📊 Reports Generated:")
+    print(f"  • JSON: {json_file}")
+    print(f"  • HTML: {html_file}")
+    print(f"  • PDF: {pdf_file}")
+    print(f"  • CSV: {csv_file}")
+    print()
+    
+    if compliance_violations:
+        print(compliance.generate_executive_summary())
+    
+    print("="*70)
+
+
 def run_monitor(target: str, interval: int, ports: list = None, 
                 skip_cve: bool = False, num_scans: int = None, slack_webhook: str = None):
     """Run continuous monitoring mode"""
@@ -408,14 +660,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic scan with compliance checking
+  # Basic scan
   python main.py scan 192.168.1.100
+
+  # Scan with live dashboard (recommended!)
+  python main.py scan 192.168.1.100 --dashboard
 
   # Full enterprise scan
   python main.py scan 192.168.1.100 \\
+    --dashboard \\
     --shodan-key YOUR_KEY \\
     --vt-key YOUR_KEY \\
-    --slack-webhook https://hooks.slack.com/... \\
     -o enterprise_scan
 
   # Continuous monitoring
@@ -434,6 +689,8 @@ Examples:
     scan_parser.add_argument('--slack-webhook', help='Slack webhook URL')
     scan_parser.add_argument('--shodan-key', help='Shodan API key')
     scan_parser.add_argument('--vt-key', help='VirusTotal API key')
+    scan_parser.add_argument('--dashboard', action='store_true',
+                            help='Use live interactive dashboard (recommended)')
     
     monitor_parser = subparsers.add_parser('monitor', help='Continuous monitoring')
     monitor_parser.add_argument('target', help='Target to monitor')
@@ -454,16 +711,27 @@ Examples:
         if args.ports:
             ports = [int(p.strip()) for p in args.ports.split(',')]
         
-        run_scan(
-            target=args.target,
-            ports=ports,
-            skip_enumeration=args.skip_enum,
-            skip_cve=args.skip_cve,
-            output=args.output,
-            slack_webhook=args.slack_webhook,
-            shodan_key=args.shodan_key,
-            vt_key=args.vt_key
-        )
+        # Use dashboard mode if requested
+        if hasattr(args, 'dashboard') and args.dashboard:
+            run_scan_with_dashboard(
+                target=args.target,
+                ports=ports,
+                skip_cve=args.skip_cve,
+                output=args.output,
+                shodan_key=args.shodan_key,
+                vt_key=args.vt_key
+            )
+        else:
+            run_scan(
+                target=args.target,
+                ports=ports,
+                skip_enumeration=args.skip_enum,
+                skip_cve=args.skip_cve,
+                output=args.output,
+                slack_webhook=args.slack_webhook,
+                shodan_key=args.shodan_key,
+                vt_key=args.vt_key
+            )
     
     elif args.command == 'monitor':
         ports = None
