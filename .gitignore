@@ -51,3 +51,6 @@ Thumbs.db
 
 # Environment variables
 .env
+*.backup
+data/monitor_history/
+data/monitor_alerts.json
