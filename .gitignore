@@ -54,3 +54,7 @@ Thumbs.db
 *.backup
 data/monitor_history/
 data/monitor_alerts.json
+data/cve_cache.json
+data/analytics_history/
+PROJECT_SUMMARY.md
+PROJECT_COMPLETE.md
