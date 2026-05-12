@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Dashboard - Attack Surface Mapper</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 2em;
+        }
+
+        .nav-link {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .target-input {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        .target-input input {
+            width: 70%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-right: 15px;
+        }
+
+        .target-input button {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .stat-card h3 {
+            color: #666;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .subtext {
+            color: #888;
+            font-size: 0.85em;
+        }
+
+        .stat-card.trend-up .trend { color: #ef4444; }
+        .stat-card.trend-down .trend { color: #10b981; }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .chart-card {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .chart-card h3 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .anomaly-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        .anomaly-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #ef4444;
+            background: #fef2f2;
+        }
+
+        .anomaly-item.critical {
+            border-left-color: #dc2626;
+            background: #fee2e2;
+        }
+
+        .anomaly-item.high {
+            border-left-color: #f59e0b;
+            background: #fef3c7;
+        }
+
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .heatmap-cell {
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            color: white;
+            font-weight: 600;
+            font-size: 1.2em;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📊 Analytics Dashboard</h1>
+            <a href="/" class="nav-link">← Back to Scanner</a>
+        </div>
+
+        <!-- Target Input -->
+        <div class="target-input">
+            <input type="text" id="targetInput" placeholder="Enter target IP (e.g., 127.0.0.1)">
+            <button onclick="loadAnalytics()">Load Analytics</button>
+        </div>
+
+        <!-- Statistics -->
+        <div id="statsSection" class="hidden">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Total Scans</h3>
+                    <div class="value" id="totalScans">0</div>
+                    <div class="subtext">Historical records</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Current Vulnerabilities</h3>
+                    <div class="value" id="currentVulns">0</div>
+                    <div class="subtext" id="vulnTrend"></div>
+                </div>
+                <div class="stat-card">
+                    <h3>Compliance Score</h3>
+                    <div class="value" id="complianceScore">0</div>
+                    <div class="subtext" id="complianceTrend"></div>
+                </div>
+                <div class="stat-card">
+                    <h3>Critical Issues</h3>
+                    <div class="value" id="criticalIssues">0</div>
+                    <div class="subtext" id="criticalAvg"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Anomalies -->
+        <div id="anomaliesSection" class="hidden anomaly-card">
+            <h3>🚨 Detected Anomalies</h3>
+            <div id="anomaliesList"></div>
+        </div>
+
+        <!-- Charts -->
+        <div id="chartsSection" class="hidden">
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>Vulnerability Trend (Last 30 Days)</h3>
+                    <canvas id="vulnTrendChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Compliance Score Evolution</h3>
+                    <canvas id="complianceTrendChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Critical Issues Over Time</h3>
+                    <canvas id="criticalTrendChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Risk Heat Map</h3>
+                    <div class="heatmap-grid">
+                        <div class="heatmap-cell" id="heatNetwork">Network</div>
+                        <div class="heatmap-cell" id="heatVulns">Vulnerabilities</div>
+                        <div class="heatmap-cell" id="heatConfig">Configuration</div>
+                        <div class="heatmap-cell" id="heatCompliance">Compliance</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let charts = {};
+
+        async function loadAnalytics() {
+            const target = document.getElementById('targetInput').value;
+            if (!target) {
+                alert('Please enter a target');
+                return;
+            }
+
+            try {
+                // Load statistics
+                const statsRes = await fetch(`/api/analytics/statistics/${target}`);
+                const stats = await statsRes.json();
+                
+                if (stats.error) {
+                    alert('No analytics data available for this target. Run a scan first!');
+                    return;
+                }
+
+                displayStatistics(stats);
+
+                // Load trends
+                const trendsRes = await fetch(`/api/analytics/trends/${target}`);
+                const trends = await trendsRes.json();
+                displayTrends(trends);
+
+                // Load heatmap
+                const heatmapRes = await fetch(`/api/analytics/heatmap/${target}`);
+                const heatmap = await heatmapRes.json();
+                displayHeatmap(heatmap);
+
+                // Load anomalies
+                const anomaliesRes = await fetch(`/api/analytics/anomalies/${target}`);
+                const anomalies = await anomaliesRes.json();
+                displayAnomalies(anomalies);
+
+                // Show sections
+                document.getElementById('statsSection').classList.remove('hidden');
+                document.getElementById('chartsSection').classList.remove('hidden');
+
+            } catch (error) {
+                console.error('Error loading analytics:', error);
+                alert('Error loading analytics data');
+            }
+        }
+
+        function displayStatistics(stats) {
+            document.getElementById('totalScans').textContent = stats.total_scans;
+            document.getElementById('currentVulns').textContent = stats.vulnerabilities.current;
+            document.getElementById('vulnTrend').textContent = `Trend: ${stats.vulnerabilities.trend}`;
+            document.getElementById('complianceScore').textContent = stats.compliance_score.current;
+            document.getElementById('complianceTrend').textContent = `Trend: ${stats.compliance_score.trend}`;
+            document.getElementById('criticalIssues').textContent = stats.critical_issues.current;
+            document.getElementById('criticalAvg').textContent = `Average: ${stats.critical_issues.average}`;
+        }
+
+        function displayTrends(trends) {
+            // Vulnerability Trend Chart
+            const ctx1 = document.getElementById('vulnTrendChart').getContext('2d');
+            if (charts.vulnTrend) charts.vulnTrend.destroy();
+            
+            charts.vulnTrend = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: trends.timestamps.map(t => new Date(t).toLocaleDateString()),
+                    datasets: [{
+                        label: 'Vulnerabilities',
+                        data: trends.vulnerabilities,
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true
+                }
+            });
+
+            // Compliance Trend Chart
+            const ctx2 = document.getElementById('complianceTrendChart').getContext('2d');
+            if (charts.complianceTrend) charts.complianceTrend.destroy();
+            
+            charts.complianceTrend = new Chart(ctx2, {
+                type: 'line',
+                data: {
+                    labels: trends.timestamps.map(t => new Date(t).toLocaleDateString()),
+                    datasets: [{
+                        label: 'Compliance Score',
+                        data: trends.compliance_score,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+
+            // Critical Issues Chart
+            const ctx3 = document.getElementById('criticalTrendChart').getContext('2d');
+            if (charts.criticalTrend) charts.criticalTrend.destroy();
+            
+            charts.criticalTrend = new Chart(ctx3, {
+                type: 'bar',
+                data: {
+                    labels: trends.timestamps.map(t => new Date(t).toLocaleDateString()),
+                    datasets: [{
+                        label: 'Critical Issues',
+                        data: trends.critical_issues,
+                        backgroundColor: '#f59e0b'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function displayHeatmap(heatmap) {
+            const getColor = (value) => {
+                if (value >= 7) return '#dc2626';
+                if (value >= 4) return '#f59e0b';
+                return '#10b981';
+            };
+
+            document.getElementById('heatNetwork').style.backgroundColor = getColor(heatmap.network);
+            document.getElementById('heatNetwork').innerHTML = `Network<br><span style="font-size:1.5em">${heatmap.network.toFixed(1)}/10</span>`;
+
+            document.getElementById('heatVulns').style.backgroundColor = getColor(heatmap.vulnerabilities);
+            document.getElementById('heatVulns').innerHTML = `Vulnerabilities<br><span style="font-size:1.5em">${heatmap.vulnerabilities.toFixed(1)}/10</span>`;
+
+            document.getElementById('heatConfig').style.backgroundColor = getColor(heatmap.configuration);
+            document.getElementById('heatConfig').innerHTML = `Configuration<br><span style="font-size:1.5em">${heatmap.configuration.toFixed(1)}/10</span>`;
+
+            document.getElementById('heatCompliance').style.backgroundColor = getColor(heatmap.compliance);
+            document.getElementById('heatCompliance').innerHTML = `Compliance<br><span style="font-size:1.5em">${heatmap.compliance.toFixed(1)}/10</span>`;
+        }
+
+        function displayAnomalies(anomalies) {
+            const container = document.getElementById('anomaliesList');
+            
+            if (anomalies.length === 0) {
+                document.getElementById('anomaliesSection').classList.add('hidden');
+                return;
+            }
+
+            document.getElementById('anomaliesSection').classList.remove('hidden');
+            container.innerHTML = '';
+
+            anomalies.forEach(anomaly => {
+                const div = document.createElement('div');
+                div.className = `anomaly-item ${anomaly.severity}`;
+                div.innerHTML = `
+                    <strong>${anomaly.message}</strong><br>
+                    <small>Current: ${anomaly.current} | Average: ${anomaly.average}</small>
+                `;
+                container.appendChild(div);
+            });
+        }
+    </script>
+</body>
+</html>

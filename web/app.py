@@ -4,7 +4,7 @@ Attack Surface Mapper - Web UI
 Flask web application for interactive security scanning.
 """
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import sys
@@ -22,6 +22,7 @@ from src.scanners.service_enumerator import ServiceEnumerator
 from src.scanners.config_auditor import ConfigAuditor
 from src.analyzers.mitre_mapper import MITREMapper
 from src.analyzers.compliance_checker import ComplianceChecker
+from src.analyzers.analytics_engine import AnalyticsEngine
 from src.reporters.html_reporter import HTMLReporter
 from src.reporters.pdf_reporter import PDFReporter
 from src.reporters.csv_reporter import CSVReporter
@@ -30,6 +31,9 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'attack-surface-mapper-secret-key'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Initialize analytics engine
+analytics = AnalyticsEngine()
 
 # Store scan history
 scan_history = []
@@ -222,6 +226,19 @@ def run_scan_background(target, ports, skip_cve):
             'compliance': compliance_summary
         }
         
+        # Record analytics data
+        analytics.record_scan({
+            'target': target,
+            'ports_open': current_scan['ports_open'],
+            'services_found': current_scan['services_found'],
+            'vulnerabilities': current_scan['vulnerabilities'],
+            'critical_issues': current_scan['critical_issues'],
+            'high_issues': current_scan['high_issues'],
+            'medium_issues': 0,
+            'low_issues': 0,
+            'compliance_score': current_scan['compliance_score']
+        })
+        
         emit_progress("✅ Scan completed successfully!", 'success')
         
         # Add to history
@@ -244,6 +261,12 @@ def run_scan_background(target, ports, skip_cve):
 def index():
     """Render main dashboard"""
     return render_template('index.html')
+
+
+@app.route('/analytics')
+def analytics_page():
+    """Render analytics dashboard"""
+    return render_template('analytics.html')
 
 
 @app.route('/api/scan', methods=['POST'])
@@ -287,17 +310,47 @@ def get_current():
     return jsonify({'status': 'idle'})
 
 
+@app.route('/api/analytics/trends/<target>')
+def get_trends(target):
+    """Get trend data for target"""
+    days = request.args.get('days', 30, type=int)
+    trends = analytics.get_trend_data(target, days)
+    return jsonify(trends)
+
+
+@app.route('/api/analytics/heatmap/<target>')
+def get_heatmap(target):
+    """Get risk heat map for target"""
+    heatmap = analytics.get_risk_heatmap(target)
+    return jsonify(heatmap)
+
+
+@app.route('/api/analytics/statistics/<target>')
+def get_statistics(target):
+    """Get statistics for target"""
+    stats = analytics.get_statistics(target)
+    return jsonify(stats)
+
+
+@app.route('/api/analytics/anomalies/<target>')
+def get_anomalies(target):
+    """Get detected anomalies"""
+    anomalies = analytics.detect_anomalies(target)
+    return jsonify(anomalies)
+
+
+@app.route('/reports/<filename>')
+def download_report(filename):
+    """Download report file"""
+    filepath = os.path.join('..', 'reports', filename)
+    return send_file(filepath, as_attachment=True)
+
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
     emit('connected', {'message': 'Connected to Attack Surface Mapper'})
 
-@app.route('/reports/<filename>')
-def download_report(filename):
-    """Download report file"""
-    from flask import send_file
-    filepath = os.path.join('..', 'reports', filename)
-    return send_file(filepath, as_attachment=True)
 
 if __name__ == '__main__':
     print("=" * 70)
