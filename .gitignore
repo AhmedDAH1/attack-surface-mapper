@@ -58,3 +58,8 @@ data/cve_cache.json
 data/analytics_history/
 PROJECT_SUMMARY.md
 PROJECT_COMPLETE.md
+htmlcov/
+.coverage
+.pytest_cache/
+*.pyc
+__pycache__/
