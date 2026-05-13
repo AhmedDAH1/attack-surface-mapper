@@ -1,5 +1,10 @@
 # Attack Surface Mapper
 
+![Tests](https://github.com/AhmedDAH1/attack-surface-mapper/workflows/Tests/badge.svg)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Coverage](https://img.shields.io/badge/coverage-8%25-yellow)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 A Python-based enterprise security assessment tool that discovers network vulnerabilities, maps them to MITRE ATT&CK techniques, checks compliance against major frameworks, and provides beautiful real-time dashboards.
 
 Built to automate security assessments while providing actionable insights through multiple interfaces - CLI, terminal dashboard, and web UI.
