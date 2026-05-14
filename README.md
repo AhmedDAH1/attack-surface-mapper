@@ -146,6 +146,35 @@ python main.py monitor 192.168.1.0/24 \
 # - Critical misconfigurations detected
 ```
 
+
+## Screenshots
+
+### CLI Terminal Dashboard
+![Dashboard Start](screenshots/dashboard_start.png)
+*Live terminal dashboard — real-time statistics and threat assessment*
+
+![Dashboard Complete](screenshots/dashboard_complete.png)
+*Scan complete — findings detected with MODERATE threat level*
+
+### Scan Output
+![CLI Output](screenshots/scan_complete_cli.png)
+*Executive compliance summary printed after every scan*
+
+### Web Interface
+![Web UI](screenshots/web_ui_home.png)
+*Web dashboard — point-and-click scanning with live updates*
+
+![Live Scan](screenshots/web_scan_progress.png)
+*Real-time scan progress — phases, findings, and MITRE mapping live*
+
+### Analytics
+![Charts](screenshots/analytics_charts.png)
+*Risk distribution and compliance overview charts*
+
+### Report Downloads
+![Reports](screenshots/report_downloads.png)
+*One-click download for JSON, HTML, PDF, and CSV reports*
+
 **Compliance Checking**
 ```bash
 # See if you meet PCI-DSS, NIST, or CIS requirements
