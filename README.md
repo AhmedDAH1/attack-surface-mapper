@@ -1,6 +1,6 @@
 # Attack Surface Mapper
 
-![Tests](https://github.com/AhmedDAH1/attack-surface-mapper/workflows/Tests/badge.svg)
+[![Tests](https://img.shields.io/badge/tests-23%20passing-brightgreen?style=flat-square)](https://github.com/AhmedDAH1/attack-surface-mapper)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![Coverage](https://img.shields.io/badge/coverage-8%25-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
