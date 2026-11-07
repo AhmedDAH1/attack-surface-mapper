@@ -1,0 +1,2 @@
+IP,Port,Service,Version,Risk Score,Risk Level,MITRE Techniques,Config Issues,Vulnerabilities,Remediation
+127.0.0.1,8000,http,0.6,2.5,Low,"T1190, T1583.006",HTTP - Unencrypted Web Traffic,None,Web servers are prime targets for exploitation and reconnaissance

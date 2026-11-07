@@ -8,18 +8,21 @@ A Python-based security assessment tool that discovers network vulnerabilities, 
 
 Built to automate security assessments while providing actionable insights through multiple interfaces — CLI, terminal dashboard, and web UI.
 
+> **An early learning project.** It wraps Nmap rather than building scanning
+> itself. Its successor, [NetScan](https://github.com/AhmedDAH1/network-scanner),
+> crafts its own packets, matches CVEs by product version and comes with
+> detection rules tested against its own traffic.
+
 ---
 
 ## Why I Built This
 
-After running countless manual security scans, I got tired of:
-- Spending hours on repetitive port scanning and service enumeration
-- Manually mapping findings to MITRE ATT&CK
-- Writing the same compliance reports over and over
-- Not knowing when my attack surface changed
-- Having no visual way to present findings
-
-So I automated it. This tool does what I used to do manually — discover services, find misconfigurations, check compliance, and present everything in real-time.
+I wanted to understand what a security assessment involves end to end, beyond
+running a port scan: turning open ports and service versions into findings,
+mapping those findings to MITRE ATT&CK, checking them against compliance
+frameworks (PCI-DSS, NIST CSF, CIS Controls), noticing when the attack surface
+changes, and presenting all of it in a way someone could act on. Building the
+pipeline myself, on my own lab machines, was how I learned those steps.
 
 ---
 
@@ -51,7 +54,7 @@ So I automated it. This tool does what I used to do manually — discover servic
 **Reporting**
 - JSON for automation and APIs
 - Interactive HTML dashboards
-- PDF reports for clients or management
+- PDF reports
 - CSV exports for spreadsheet analysis
 
 **Visualization**
@@ -85,7 +88,7 @@ python3 web/app.py
 
 ---
 
-## Real-World Usage
+## Usage Examples
 
 **Command-Line Scanning**
 ```bash
@@ -98,13 +101,13 @@ python main.py scan 192.168.1.100 \
   --shodan-key YOUR_KEY \
   --vt-key YOUR_KEY \
   --slack-webhook https://hooks.slack.com/... \
-  -o client_assessment
+  -o lab_assessment
 
 # Output: 4 reports automatically generated
-# - client_assessment.json (for automation)
-# - client_assessment.html (interactive dashboard)
-# - client_assessment.pdf (professional report)
-# - client_assessment.csv (for spreadsheets)
+# - lab_assessment.json (for automation)
+# - lab_assessment.html (interactive dashboard)
+# - lab_assessment.pdf (report)
+# - lab_assessment.csv (for spreadsheets)
 ```
 
 **Live Terminal Dashboard**
